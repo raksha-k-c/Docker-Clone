@@ -27,7 +27,7 @@ func run() {
 	cmd.Stderr = os.Stderr
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 	}
 
 	if err := cmd.Run(); err != nil {
@@ -39,7 +39,12 @@ func run() {
 func child() {
 	fmt.Printf("Running %v as PID %d (inside new namespace)\n", os.Args[2:], os.Getpid())
 
-	syscall.Sethostname([]byte("mycontainer"))
+	must(syscall.Sethostname([]byte("mycontainer")))
+
+	must(syscall.Chroot("rootfs"))
+	must(os.Chdir("/"))
+
+	must(syscall.Mount("proc", "proc", "proc", 0, ""))
 
 	cmd := exec.Command(os.Args[2], os.Args[3:]...)
 	cmd.Stdin = os.Stdin
@@ -48,6 +53,13 @@ func child() {
 
 	if err := cmd.Run(); err != nil {
 		fmt.Println("Error:", err)
-		os.Exit(1)
+	}
+
+	must(syscall.Unmount("proc", 0))
+}
+
+func must(err error) {
+	if err != nil {
+		panic(err)
 	}
 }
