@@ -35,10 +35,15 @@ func run() {
 
 	fmt.Printf("Running %v as PID %d (memory=%s, pids=%d)\n", command, os.Getpid(), *memory, *pids)
 
+	// Create a pipe: child will block reading from it until we write "ready"
+	readPipe, writePipe, err := os.Pipe()
+	must(err)
+
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, command...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.ExtraFiles = []*os.File{readPipe} // becomes fd 3 inside the child
 
 	cmd.Env = append(os.Environ(),
 		"MYDOCKER_MEMORY="+*memory,
@@ -49,17 +54,36 @@ func run() {
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
 	}
 
-	if err := cmd.Run(); err != nil {
+	must(cmd.Start()) // Start (not Run!) so we can act while the child waits
+
+	// Child is now alive, paused, waiting to read from the pipe.
+	// Set up networking using the child's real PID.
+	setupNetworking(cmd.Process.Pid)
+
+	// Signal the child: networking is ready, proceed.
+	writePipe.Write([]byte("ready"))
+	writePipe.Close()
+
+	// Now wait for the child to actually finish running the command.
+	if err := cmd.Wait(); err != nil {
 		fmt.Println("Error:", err)
-		os.Exit(1)
 	}
+
+	cleanupNetworking()
 }
 
 func child() {
-	fmt.Printf("Running %v as PID %d (inside new namespace)\n", os.Args[2:], os.Getpid())
-	cg()
-	must(syscall.Sethostname([]byte("mycontainer")))
+	// Wait for the parent to signal that networking is ready
+	pipe := os.NewFile(3, "pipe")
+	buf := make([]byte, 5)
+	pipe.Read(buf)
+	pipe.Close()
 
+	fmt.Printf("Running %v as PID %d (inside new namespace)\n", os.Args[2:], os.Getpid())
+
+	cg()
+
+	must(syscall.Sethostname([]byte("mycontainer")))
 	must(syscall.Chroot("rootfs"))
 	must(os.Chdir("/"))
 
@@ -127,4 +151,12 @@ func must(err error) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func setupNetworking(pid int) {
+	fmt.Println("(networking setup would happen here, PID:", pid, ")")
+}
+
+func cleanupNetworking() {
+	fmt.Println("(networking cleanup would happen here)")
 }
