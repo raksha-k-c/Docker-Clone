@@ -7,4 +7,4 @@ Building a minimal container runtime from scratch to understand how Docker works
 - [x] Stage 2: Process isolation (PID namespace)
 - [x] Stage 3: Filesystem isolation (chroot + mount namespace)
 - [x] Stage 4: Resource limits (cgroups)
-- [ ] Stage 5: Networking
+- [x] Stage 5: Networking
