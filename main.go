@@ -84,6 +84,18 @@ func child() {
 	cg()
 
 	must(syscall.Sethostname([]byte("mycontainer")))
+	fmt.Printf("Running %v as PID %d (inside new namespace)\n", os.Args[2:], os.Getpid())
+
+	cg()
+
+	must(syscall.Sethostname([]byte("mycontainer")))
+
+	runCmd("ip", "link", "set", "lo", "up")
+	runCmd("ip", "addr", "add", "10.0.0.2/24", "dev", "veth1")
+	runCmd("ip", "link", "set", "veth1", "up")
+	runCmd("ip", "route", "add", "default", "via", "10.0.0.1")
+
+	must(syscall.Chroot("rootfs"))
 	must(syscall.Chroot("rootfs"))
 	must(os.Chdir("/"))
 
@@ -166,7 +178,9 @@ func runCmd(name string, args ...string) {
 func setupNetworking(pid int) {
 	runCmd("ip", "link", "add", "veth0", "type", "veth", "peer", "name", "veth1")
 	runCmd("ip", "link", "set", "veth1", "netns", strconv.Itoa(pid))
-	fmt.Println("Networking: veth pair created and attached to container namespace")
+	runCmd("ip", "addr", "add", "10.0.0.1/24", "dev", "veth0")
+	runCmd("ip", "link", "set", "veth0", "up")
+	fmt.Println("Networking: veth pair created, host side configured (10.0.0.1)")
 }
 
 func cleanupNetworking() {
