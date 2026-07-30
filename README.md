@@ -119,6 +119,15 @@ ping 8.8.8.8
 - No image pull/push, registry support, or Dockerfile-equivalent build system
 - This project uses `chroot` for filesystem isolation rather than `pivot_root`, which is what production container runtimes (including Docker's `runc`) use for stronger security. I implemented `pivot_root` (see the `pivotRoot()` function in main.go) and tested it, but it consistently failed with `EINVAL` in this development environment (WSL2), which has known quirks around mount namespace operations due to its virtualized filesystem layer. On a standard Linux install, the same `pivot_root` code should work as expected. I kept the implementation in the codebase (unused) to document the attempt and the reasoning.
 
+## markdown
+
+## Using pivot_root instead of chroot
+
+This project uses `pivot_root` rather than `chroot` for filesystem isolation - the same approach production container runtimes (including Docker's `runc`) use, since `pivot_root` fully detaches the old root filesystem rather than just changing what a process considers "/" (which `chroot` alone can, in some cases, be escaped from with enough privileges).
+
+One debugging note: an early attempt failed with a confusing `EINVAL`/path-resolution error that looked like an environment limitation. The real cause was `os.UserHomeDir()` resolving to `/root` (root's home) instead of the actual user's home directory, since the program runs under `sudo` - a good reminder that home-directory assumptions can break silently under privilege escalation. Hardcoding the absolute rootfs path resolved it.
+
+
 ## Why Go
 
 Real container tooling (runc, containerd, Docker's engine, Kubernetes) is written in Go, and its standard library exposes namespace flags as a typed struct (syscall.SysProcAttr.Cloneflags) rather than requiring raw C-style syscalls. This made it possible to focus on the concepts rather than fighting language plumbing.

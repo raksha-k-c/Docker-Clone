@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -35,7 +36,6 @@ func run() {
 
 	fmt.Printf("Running %v as PID %d (memory=%s, pids=%d)\n", command, os.Getpid(), *memory, *pids)
 
-	// Create a pipe: child will block reading from it until we write "ready"
 	readPipe, writePipe, err := os.Pipe()
 	must(err)
 
@@ -43,7 +43,7 @@ func run() {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.ExtraFiles = []*os.File{readPipe} // becomes fd 3 inside the child
+	cmd.ExtraFiles = []*os.File{readPipe}
 
 	cmd.Env = append(os.Environ(),
 		"MYDOCKER_MEMORY="+*memory,
@@ -54,17 +54,13 @@ func run() {
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
 	}
 
-	must(cmd.Start()) // Start (not Run!) so we can act while the child waits
+	must(cmd.Start())
 
-	// Child is now alive, paused, waiting to read from the pipe.
-	// Set up networking using the child's real PID.
 	setupNetworking(cmd.Process.Pid)
 
-	// Signal the child: networking is ready, proceed.
 	writePipe.Write([]byte("ready"))
 	writePipe.Close()
 
-	// Now wait for the child to actually finish running the command.
 	if err := cmd.Wait(); err != nil {
 		fmt.Println("Error:", err)
 	}
@@ -73,17 +69,11 @@ func run() {
 }
 
 func child() {
-	// Wait for the parent to signal that networking is ready
 	pipe := os.NewFile(3, "pipe")
 	buf := make([]byte, 5)
 	pipe.Read(buf)
 	pipe.Close()
 
-	fmt.Printf("Running %v as PID %d (inside new namespace)\n", os.Args[2:], os.Getpid())
-
-	cg()
-
-	must(syscall.Sethostname([]byte("mycontainer")))
 	fmt.Printf("Running %v as PID %d (inside new namespace)\n", os.Args[2:], os.Getpid())
 
 	cg()
@@ -95,11 +85,11 @@ func child() {
 	runCmd("ip", "link", "set", "veth1", "up")
 	runCmd("ip", "route", "add", "default", "via", "10.0.0.1")
 
-	must(syscall.Chroot("rootfs"))
-	must(syscall.Chroot("rootfs"))
-	must(os.Chdir("/"))
+	rootfsPath := "/home/rakshakc/mydocker/rootfs"
+	must(pivotRoot(rootfsPath))
 
 	must(syscall.Mount("proc", "proc", "proc", 0, ""))
+
 	cmd := exec.Command(os.Args[2], os.Args[3:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -121,23 +111,21 @@ func pivotRoot(newRoot string) error {
 		return fmt.Errorf("failed to make new root private: %w", err)
 	}
 
-	must(os.Chdir(newRoot))
+	oldRootDir := filepath.Join(newRoot, ".old_root")
+	must(os.MkdirAll(oldRootDir, 0700))
 
-	// Self-pivot trick: pivot_root(".", ".") pivots the current directory
-	// onto itself, which works around stricter filesystem/mount setups.
-	if err := syscall.PivotRoot(".", "."); err != nil {
+	if err := syscall.PivotRoot(newRoot, oldRootDir); err != nil {
 		return fmt.Errorf("pivot_root failed: %w", err)
 	}
 
-	// After this trick, the old root ends up mounted at the current directory
-	// itself (now "/"), so we unmount it directly by changing to root first.
-	must(syscall.Chdir("/"))
+	must(os.Chdir("/"))
 
-	if err := syscall.Unmount(".", syscall.MNT_DETACH); err != nil {
+	oldRootDir = "/.old_root"
+	if err := syscall.Unmount(oldRootDir, syscall.MNT_DETACH); err != nil {
 		return fmt.Errorf("unmount old root failed: %w", err)
 	}
 
-	return nil
+	return os.RemoveAll(oldRootDir)
 }
 
 func cg() {
