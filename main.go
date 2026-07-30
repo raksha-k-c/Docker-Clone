@@ -147,16 +147,29 @@ func parseMemory(s string) (int64, error) {
 
 	return value * multiplier, nil
 }
+
 func must(err error) {
 	if err != nil {
 		panic(err)
 	}
 }
 
+func runCmd(name string, args ...string) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Error running %s %v: %v\n", name, args, err)
+	}
+}
+
 func setupNetworking(pid int) {
-	fmt.Println("(networking setup would happen here, PID:", pid, ")")
+	runCmd("ip", "link", "add", "veth0", "type", "veth", "peer", "name", "veth1")
+	runCmd("ip", "link", "set", "veth1", "netns", strconv.Itoa(pid))
+	fmt.Println("Networking: veth pair created and attached to container namespace")
 }
 
 func cleanupNetworking() {
-	fmt.Println("(networking cleanup would happen here)")
+	runCmd("ip", "link", "delete", "veth0")
+	fmt.Println("Networking: veth pair deleted")
 }
