@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
@@ -38,7 +39,7 @@ func run() {
 
 func child() {
 	fmt.Printf("Running %v as PID %d (inside new namespace)\n", os.Args[2:], os.Getpid())
-
+	cg()
 	must(syscall.Sethostname([]byte("mycontainer")))
 
 	must(syscall.Chroot("rootfs"))
@@ -56,6 +57,18 @@ func child() {
 	}
 
 	must(syscall.Unmount("proc", 0))
+}
+
+func cg() {
+	cgroupPath := "/sys/fs/cgroup/mydocker"
+
+	must(os.MkdirAll(cgroupPath, 0755))
+
+	must(os.WriteFile(cgroupPath+"/memory.max", []byte("100000000"), 0700))
+
+	must(os.WriteFile(cgroupPath+"/pids.max", []byte("20"), 0700))
+
+	must(os.WriteFile(cgroupPath+"/cgroup.procs", []byte(strconv.Itoa(os.Getpid())), 0700))
 }
 
 func must(err error) {
