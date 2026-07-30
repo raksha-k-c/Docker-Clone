@@ -117,6 +117,7 @@ ping 8.8.8.8
 - No image layering / union filesystem - just a flat extracted rootfs
 - Networking setup is manual/scripted, not automated inside main.go
 - No image pull/push, registry support, or Dockerfile-equivalent build system
+- This project uses `chroot` for filesystem isolation rather than `pivot_root`, which is what production container runtimes (including Docker's `runc`) use for stronger security. I implemented `pivot_root` (see the `pivotRoot()` function in main.go) and tested it, but it consistently failed with `EINVAL` in this development environment (WSL2), which has known quirks around mount namespace operations due to its virtualized filesystem layer. On a standard Linux install, the same `pivot_root` code should work as expected. I kept the implementation in the codebase (unused) to document the attempt and the reasoning.
 
 ## Why Go
 

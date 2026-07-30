@@ -100,7 +100,6 @@ func child() {
 	must(os.Chdir("/"))
 
 	must(syscall.Mount("proc", "proc", "proc", 0, ""))
-
 	cmd := exec.Command(os.Args[2], os.Args[3:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -111,6 +110,34 @@ func child() {
 	}
 
 	must(syscall.Unmount("proc", 0))
+}
+
+func pivotRoot(newRoot string) error {
+	if err := syscall.Mount(newRoot, newRoot, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind mount failed: %w", err)
+	}
+
+	if err := syscall.Mount("", newRoot, "", syscall.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("failed to make new root private: %w", err)
+	}
+
+	must(os.Chdir(newRoot))
+
+	// Self-pivot trick: pivot_root(".", ".") pivots the current directory
+	// onto itself, which works around stricter filesystem/mount setups.
+	if err := syscall.PivotRoot(".", "."); err != nil {
+		return fmt.Errorf("pivot_root failed: %w", err)
+	}
+
+	// After this trick, the old root ends up mounted at the current directory
+	// itself (now "/"), so we unmount it directly by changing to root first.
+	must(syscall.Chdir("/"))
+
+	if err := syscall.Unmount(".", syscall.MNT_DETACH); err != nil {
+		return fmt.Errorf("unmount old root failed: %w", err)
+	}
+
+	return nil
 }
 
 func cg() {
