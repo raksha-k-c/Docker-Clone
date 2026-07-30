@@ -1,10 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -20,16 +22,32 @@ func main() {
 }
 
 func run() {
-	fmt.Printf("Running %v as PID %d\n", os.Args[2:], os.Getpid())
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	memory := fs.String("memory", "100m", "memory limit (e.g. 100m, 512m, 1g)")
+	pids := fs.Int("pids", 20, "max number of processes")
+	fs.Parse(os.Args[2:])
 
-	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
+	command := fs.Args()
+	if len(command) == 0 {
+		fmt.Println("Error: no command given. Usage: mydocker run [--memory 100m] [--pids 20] <command>")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Running %v as PID %d (memory=%s, pids=%d)\n", command, os.Getpid(), *memory, *pids)
+
+	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, command...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
+	cmd.Env = append(os.Environ(),
+		"MYDOCKER_MEMORY="+*memory,
+		"MYDOCKER_PIDS="+strconv.Itoa(*pids),
+	)
+
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-	Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
-}
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
+	}
 
 	if err := cmd.Run(); err != nil {
 		fmt.Println("Error:", err)
@@ -64,13 +82,47 @@ func cg() {
 
 	must(os.MkdirAll(cgroupPath, 0755))
 
-	must(os.WriteFile(cgroupPath+"/memory.max", []byte("100000000"), 0700))
+	memory := os.Getenv("MYDOCKER_MEMORY")
+	if memory == "" {
+		memory = "100m"
+	}
+	memoryBytes, err := parseMemory(memory)
+	must(err)
 
-	must(os.WriteFile(cgroupPath+"/pids.max", []byte("20"), 0700))
+	must(os.WriteFile(cgroupPath+"/memory.max", []byte(strconv.FormatInt(memoryBytes, 10)), 0700))
+
+	pids := os.Getenv("MYDOCKER_PIDS")
+	if pids == "" {
+		pids = "20"
+	}
+	must(os.WriteFile(cgroupPath+"/pids.max", []byte(pids), 0700))
 
 	must(os.WriteFile(cgroupPath+"/cgroup.procs", []byte(strconv.Itoa(os.Getpid())), 0700))
 }
 
+func parseMemory(s string) (int64, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	multiplier := int64(1)
+
+	switch {
+	case strings.HasSuffix(s, "g"):
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "g")
+	case strings.HasSuffix(s, "m"):
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "m")
+	case strings.HasSuffix(s, "k"):
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "k")
+	}
+
+	value, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid memory value %q: %w", s, err)
+	}
+
+	return value * multiplier, nil
+}
 func must(err error) {
 	if err != nil {
 		panic(err)
